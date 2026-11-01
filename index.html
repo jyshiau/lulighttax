@@ -107,19 +107,19 @@ textarea{min-height:60px;resize:vertical}
   <section id="v-add">
     <div class="card stack">
       <h2>掃描電子發票</h2>
-      <div class="pickwrap"><div class="btn primary">
+      <button class="btn primary hidden" id="liveBtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2"/><rect x="7" y="7" width="4" height="4"/><rect x="13" y="13" width="4" height="4"/><path d="M13 7h4v4M7 13v4h4"/></svg>開啟鏡頭掃描發票</button>
+      <div class="pickwrap" id="captureWrap"><div class="btn primary">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2"/><rect x="7" y="7" width="4" height="4"/><rect x="13" y="13" width="4" height="4"/><path d="M13 7h4v4M7 13v4h4"/></svg>
         拍照掃描發票 QR Code
       </div><input id="photoIn" type="file" accept="image/*" capture="environment" aria-label="拍照掃描發票"></div>
       <div class="pickwrap"><div class="btn ghost">從相簿選發票照片</div><input id="albumIn" type="file" accept="image/*" aria-label="從相簿選照片"></div>
       <div id="scanMsg" class="scanmsg hidden"></div>
-      <button class="btn secondary hidden" id="liveBtn">即時鏡頭掃描</button>
       <div id="liveWrap" class="hidden">
         <div class="scanbox"><video id="video" playsinline muted></video><div class="frame"></div></div>
         <div class="scanstat"><span id="stL">左邊 QR：未讀到</span><span id="stR">右邊 QR：未讀到</span></div>
         <div class="row" style="margin-top:8px"><button class="btn ghost small" id="liveStop">關閉鏡頭</button><button class="btn secondary small" id="liveDone">使用目前結果</button></div>
       </div>
-      <div class="hint">拍照時讓<b>左右兩個 QR Code 都入鏡</b>、對焦清楚、避免反光。左邊 QR 有發票號碼、日期、金額與賣方統編；右邊 QR 是品項明細（讀不到也可以存）。</div>
+      <div class="hint">掃描時讓<b>左右兩個 QR Code 都入鏡</b>、對焦清楚、避免反光。左邊 QR 有發票號碼、日期、金額與賣方統編；右邊 QR 是品項明細（讀不到也可以存）。</div>
     </div>
 
     <div class="card stack">
@@ -778,7 +778,16 @@ async function startLive() {
       new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 12000))
     ]);
     $("#scanMsg").classList.add("hidden");
-  } catch (e) { window.__noLive = true; $("#liveBtn").classList.add("hidden"); scanMsg("這個頁面無法開啟即時鏡頭，請改用上面的「拍照掃描發票 QR Code」。", "err"); return; }
+  } catch (e) {
+    const denied = e && (e.name === "NotAllowedError" || e.name === "SecurityError");
+    if (denied && window.isSecureContext && !window.__inFrame) {
+      scanMsg("鏡頭權限被拒絕了。請點網址列左邊的圖示 →「權限」→ 開啟「相機」，再重新整理頁面。也可以先用「從相簿選發票照片」。", "err");
+    } else {
+      window.__noLive = true; $("#liveBtn").classList.add("hidden"); $("#captureWrap").classList.remove("hidden");
+      scanMsg("這裡無法開啟即時鏡頭，請改用「拍照掃描發票 QR Code」或「從相簿選發票照片」。", "err");
+    }
+    return;
+  }
   const v = $("#video"); v.srcObject = stream; await v.play().catch(() => {});
   live = { left: null, right: null }; updLive();
   $("#liveWrap").classList.remove("hidden"); $("#liveBtn").classList.add("hidden");
@@ -804,7 +813,7 @@ function stopLive() {
   clearTimeout(liveTimer);
   if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
   $("#liveWrap").classList.add("hidden");
-  if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia && !window.__noLive) $("#liveBtn").classList.remove("hidden");
+  if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia && !window.__noLive && !window.__inFrame) $("#liveBtn").classList.remove("hidden");
 }
 $("#liveBtn").onclick = startLive;
 $("#liveStop").onclick = stopLive;
@@ -816,7 +825,10 @@ $("#liveDone").onclick = () => { if (!live.left) { toast("還沒讀到左邊 QR"
     const pol = document.permissionsPolicy || document.featurePolicy;
     if (pol && pol.allowsFeature && !pol.allowsFeature("camera")) { window.__noLive = true; return; }
   } catch (e) {}
-  $("#liveBtn").classList.remove("hidden");
+  try { window.__inFrame = window.self !== window.top; } catch (e) { window.__inFrame = true; }
+  if (window.__inFrame) return;
+  // 在自己的網址上：主按鈕直接開鏡頭即時掃描（部分 Android 的拍照按鈕會跑去相簿）
+  $("#liveBtn").classList.remove("hidden"); $("#captureWrap").classList.add("hidden");
 })();
 
 /* ========== 匯出 / 匯入 ========== */
