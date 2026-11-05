@@ -94,9 +94,29 @@ textarea{min-height:60px;resize:vertical}
 .catedit{display:flex;gap:8px;align-items:center;padding:6px 0;border-bottom:1px solid var(--line)}
 .catedit input[type=color]{width:42px;height:38px;padding:2px;flex:0 0 42px}
 .catedit .nm{flex:1}
+body.locked>header,body.locked>main,body.locked>nav{display:none}
+#loginView{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px 16px;background:linear-gradient(180deg,var(--brand) 0,var(--brand) 38%,var(--bg) 38%)}
+#loginView .card{width:100%;max-width:380px;padding:22px 18px}
+#loginView .logo{text-align:center;color:#fff;margin-bottom:16px}
+#loginView .logo b{display:block;font-size:22px;letter-spacing:1px}
+#loginView .logo small{opacity:.8}
+#loginMsg{min-height:20px;margin:10px 0 0;font-size:14px}
 </style>
 </head>
-<body>
+<body class="locked">
+<div id="loginView">
+  <div style="width:100%;max-width:380px">
+    <div class="logo"><b>☕ 璐光咖啡廳記帳</b><small>請先登入</small></div>
+    <form class="card" id="loginForm" autocomplete="on">
+      <label for="lgUser" style="margin-top:0">帳號</label>
+      <input id="lgUser" name="username" autocomplete="username" autocapitalize="off" spellcheck="false" required>
+      <label for="lgPass">密碼</label>
+      <input id="lgPass" name="password" type="password" autocomplete="current-password" inputmode="numeric" required>
+      <p id="loginMsg" class="muted"></p>
+      <button type="submit" class="btn primary" id="lgBtn" style="margin-top:6px">登入</button>
+    </form>
+  </div>
+</div>
 <header>
   <div><h1>☕ 璐光咖啡廳記帳</h1><small id="hdrSub">每月費用登錄與報表</small></div>
   <span class="sync" id="syncBadge">本機</span>
@@ -177,6 +197,11 @@ textarea{min-height:60px;resize:vertical}
       <h2>廠商自動分類</h2>
       <p class="muted" style="margin-top:0">同一個賣方統編第二次出現時，會自動帶入上次選的分類與廠商名稱。</p>
       <div class="list" id="vendorList"></div>
+    </div>
+    <div class="card stack">
+      <h2>帳號</h2>
+      <div class="muted" id="acctInfo"></div>
+      <button class="btn ghost" id="logoutBtn">登出</button>
     </div>
     <div class="card stack">
       <h2>資料備份</h2>
@@ -412,55 +437,175 @@ const DEFAULT_CATS = [
   { name: "人事薪資", color: "#c9a227" }, { name: "設備維修", color: "#6b7b8c" },
   { name: "行銷廣告", color: "#d1607a" }, { name: "雜支", color: "#a39a91" }
 ];
+/* ========== 雲端設定（Firebase） ==========
+   填入 Firebase 專案設定後，登入改由 Firebase 驗證，資料存在 Firestore，任何裝置登入都看得到同一份帳。
+   留空（null）時只做本機登入，資料只存在這台裝置。 */
+const FIREBASE_CONFIG = null;
+const FIREBASE_SDK = "https://www.gstatic.com/firebasejs/10.12.2/";
+const LOGIN_EMAIL_DOMAIN = "luguang.example";   // 帳號 admin → admin@luguang.example
+// 沒有雲端時的本機登入（只是擋一下，不是真正的安全機制）
+const LOCAL_LOGIN = { user: "admin", sha256: "4cf5d7a4655512f949aeec3777c20126b47c71b84b781636fbe587102155924e" };
+
 const LS_KEY = "luguang-acct-v1";
+const LS_BACKUP_KEY = "luguang-acct-v1-before-cloud";
+const LS_SESSION = "luguang-session";
+
+function loadScript(src) {
+  return new Promise((res, rej) => { const s = document.createElement("script"); s.src = src; s.onload = res; s.onerror = () => rej(new Error("load " + src)); document.head.appendChild(s); });
+}
+async function sha256Hex(text) {
+  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, "0")).join("");
+}
+
+const Auth = {
+  mode: FIREBASE_CONFIG ? "firebase" : "local", user: null,
+  async init() {
+    if (this.mode === "firebase") {
+      await loadScript(FIREBASE_SDK + "firebase-app-compat.js");
+      await Promise.all([loadScript(FIREBASE_SDK + "firebase-auth-compat.js"), loadScript(FIREBASE_SDK + "firebase-firestore-compat.js")]);
+      if (!firebase.apps.length) firebase.initializeApp(FIREBASE_CONFIG);
+      return new Promise(res => {
+        let first = true;
+        firebase.auth().onAuthStateChanged(u => {
+          this.user = u ? { name: (u.email || "").split("@")[0], uid: u.uid } : null;
+          if (first) { first = false; res(this.user); } else if (!u) location.reload();
+        });
+      });
+    }
+    try { const s = JSON.parse(localStorage.getItem(LS_SESSION) || "null"); if (s && s.user) this.user = { name: s.user, uid: "local" }; } catch (e) {}
+    return this.user;
+  },
+  async login(user, pass) {
+    user = user.trim().toLowerCase();
+    if (this.mode === "firebase") {
+      try {
+        const cred = await firebase.auth().signInWithEmailAndPassword(user + "@" + LOGIN_EMAIL_DOMAIN, pass);
+        this.user = { name: user, uid: cred.user.uid };
+      } catch (e) {
+        const c = e && e.code || "";
+        if (/network/.test(c)) throw new Error("連不上網路，請確認手機有連線");
+        if (/too-many-requests/.test(c)) throw new Error("嘗試太多次，請稍後再試");
+        throw new Error("帳號或密碼錯誤");
+      }
+      return this.user;
+    }
+    let h = "";
+    try { h = await sha256Hex(pass); } catch (e) { h = ""; }
+    if (user !== LOCAL_LOGIN.user || h !== LOCAL_LOGIN.sha256) throw new Error("帳號或密碼錯誤");
+    this.user = { name: user, uid: "local" };
+    try { localStorage.setItem(LS_SESSION, JSON.stringify({ user, at: new Date().toISOString() })); } catch (e) {}
+    return this.user;
+  },
+  async logout() {
+    try { localStorage.removeItem(LS_SESSION); } catch (e) {}
+    if (this.mode === "firebase") {
+      await firebase.auth().signOut().catch(() => {});
+      // 清掉這台裝置上的雲端快取，避免別人在同一台裝置看到帳
+      try { await firebase.firestore().terminate(); await firebase.firestore().clearPersistence(); } catch (e) {}
+    }
+    location.reload();
+  }
+};
+
 const Store = {
   mode: "local", db: null, expenses: [], config: { categories: DEFAULT_CATS, vendors: {} },
   listeners: [],
   onChange(fn) { this.listeners.push(fn); },
   emit() { this.listeners.forEach(f => f()); },
+  readLocal() {
+    try { const raw = localStorage.getItem(LS_KEY); return raw ? JSON.parse(raw) : null; } catch (e) { return null; }
+  },
   loadLocal() {
-    try {
-      const raw = localStorage.getItem(LS_KEY);
-      if (raw) { const d = JSON.parse(raw); this.expenses = d.expenses || []; this.config = Object.assign({ categories: DEFAULT_CATS, vendors: {} }, d.config || {}); }
-    } catch (e) {}
+    const d = this.readLocal();
+    if (d) { this.expenses = d.expenses || []; this.config = Object.assign({ categories: DEFAULT_CATS, vendors: {} }, d.config || {}); }
   },
   saveLocal() {
     try { localStorage.setItem(LS_KEY, JSON.stringify({ expenses: this.expenses, config: this.config })); } catch (e) {}
   },
   async connect() {
     let db = null;
-    try { db = window.claude && window.claude.use ? await window.claude.use("db") : null; } catch (e) { db = null; }
-    if (!db) { setSync("本機儲存", "資料只存在這支手機的瀏覽器裡，請定期備份"); return; }
+    if (Auth.mode === "firebase") {
+      db = firebase.firestore();
+      // 離線也能看帳、記帳，連上網路後自動上傳
+      try { await db.enablePersistence({ synchronizeTabs: true }); } catch (e) {}
+    } else {
+      try { db = window.claude && window.claude.use ? await window.claude.use("db") : null; } catch (e) { db = null; }
+    }
+    if (!db) { this.loadLocal(); this.emit(); setSync("本機儲存", "資料只存在這台裝置的瀏覽器裡，請定期備份"); return; }
     this.db = db; this.mode = "cloud";
     setSync("連線中…");
     const timer = setTimeout(() => setSync("雲端連線較慢", "暫時讀不到雲端資料，顯示的可能不是最新"), 10000);
-    db.collection("expenses").onSnapshot(snap => {
+    let gotConfig = false, cloudConfigExists = false, gotServerExpenses = false;
+    const tryMigrate = () => { if (gotConfig && gotServerExpenses) this.migrateLocal(cloudConfigExists); };
+    const col = db.collection("expenses"), onExp = snap => {
       this.expenses = snap.docs.map(d => Object.assign({ id: d.id }, d.data()));
-      if (!snap.metadata.fromCache) { clearTimeout(timer); setSync("雲端同步", "資料存在雲端，多支手機可共用"); }
+      if (!snap.metadata.fromCache) {
+        clearTimeout(timer);
+        setSync(snap.metadata.hasPendingWrites ? "上傳中…" : "雲端同步", "資料存在雲端，任何裝置登入都看得到");
+        if (!gotServerExpenses) { gotServerExpenses = true; tryMigrate(); }
+      } else if (navigator.onLine === false) setSync("離線", "目前離線，新增的資料會在連上網路後自動上傳");
       this.emit();
-    }, err => { clearTimeout(timer); setSync("雲端錯誤", "雲端暫時無法使用：" + err.code); });
+    }, onErr = err => { clearTimeout(timer); setSync("雲端錯誤", "雲端暫時無法使用：" + err.code); };
+    if (Auth.mode === "firebase") col.onSnapshot({ includeMetadataChanges: true }, onExp, onErr); else col.onSnapshot(onExp, onErr);
     db.doc("config/main").onSnapshot(snap => {
       if (snap.exists) {
         const d = snap.data();
         this.config = { categories: (d.categories && d.categories.length) ? d.categories : DEFAULT_CATS, vendors: d.vendors || {} };
       }
+      if (!snap.metadata.fromCache && !gotConfig) { gotConfig = true; cloudConfigExists = snap.exists; tryMigrate(); }
       this.emit();
     }, () => {});
   },
-  _cfgWriting: Promise.resolve(),
+  _migrated: false,
+  // 第一次在這台裝置登入雲端時，把原本存在手機裡的帳搬上去（同一筆保留較新的版本）
+  async migrateLocal(cloudConfigExists) {
+    if (this._migrated) return; this._migrated = true;
+    const d = this.readLocal();
+    if (!d || !((d.expenses && d.expenses.length) || d.config)) return;
+    const byId = new Map(this.expenses.map(e => [e.id, e]));
+    const ups = (d.expenses || []).filter(e => e && e.id && (!byId.has(e.id) || (e.updatedAt || e.createdAt || "") > (byId.get(e.id).updatedAt || byId.get(e.id).createdAt || "")));
+    try {
+      for (let i = 0; i < ups.length; i += 400) {
+        const batch = this.db.batch();
+        ups.slice(i, i + 400).forEach(e => { const body = JSON.parse(JSON.stringify(e)); delete body.id; batch.set(this.db.collection("expenses").doc(e.id), body); });
+        await batch.commit();
+      }
+      if (d.config) {
+        const lc = d.config, cats = this.config.categories.slice();
+        if (!cloudConfigExists) this.config = { categories: (lc.categories && lc.categories.length) ? lc.categories : DEFAULT_CATS, vendors: lc.vendors || {} };
+        else {
+          const names = new Set(cats.map(c => c.name));
+          this.config = { categories: cats.concat((lc.categories || []).filter(c => !names.has(c.name))), vendors: Object.assign({}, lc.vendors || {}, this.config.vendors || {}) };
+        }
+        await this.db.doc("config/main").set(JSON.parse(JSON.stringify(this.config)));
+      }
+      // 搬完後本機那份改名保留當備份，不再重複搬
+      localStorage.setItem(LS_BACKUP_KEY, JSON.stringify(Object.assign({ movedAt: new Date().toISOString() }, d)));
+      localStorage.removeItem(LS_KEY);
+      if (ups.length) toast(`已把這台裝置原有的 ${ups.length} 筆帳上傳到雲端`, 3500);
+      this.emit();
+    } catch (e) {
+      this._migrated = false;
+      toast("本機舊資料上傳失敗，下次開啟會再試：" + (e.code || e.message), 4000);
+    }
+  },
+  // 雲端寫入不等伺服器回應：離線時先存在裝置上，連線後自動上傳
+  _write(p, what) {
+    if (Auth.mode !== "firebase") return p;
+    Promise.resolve(p).catch(e => toast(what + "失敗：" + ((e && (e.code || e.message)) || "未知錯誤"), 4000));
+    return Promise.resolve();
+  },
   async saveConfig() {
-    if (this.mode === "cloud") {
-      const body = JSON.parse(JSON.stringify(this.config));
-      this._cfgWriting = this._cfgWriting.then(() => this.db.doc("config/main").set(body)).catch(e => toast("分類設定儲存失敗：" + (e.code || e.message)));
-      await this._cfgWriting;
-    } else { this.saveLocal(); }
+    if (this.mode === "cloud") await this._write(this.db.doc("config/main").set(JSON.parse(JSON.stringify(this.config))), "分類設定儲存");
+    else this.saveLocal();
     this.emit();
   },
   async put(rec) {
     rec.updatedAt = new Date().toISOString();
     if (this.mode === "cloud") {
       const body = JSON.parse(JSON.stringify(rec)); delete body.id;
-      await this.db.collection("expenses").doc(rec.id).set(body);
+      await this._write(this.db.collection("expenses").doc(rec.id).set(body), "儲存");
     } else {
       const i = this.expenses.findIndex(e => e.id === rec.id);
       if (i >= 0) this.expenses[i] = rec; else this.expenses.push(rec);
@@ -468,7 +613,7 @@ const Store = {
     }
   },
   async remove(id) {
-    if (this.mode === "cloud") await this.db.collection("expenses").doc(id).delete();
+    if (this.mode === "cloud") await this._write(this.db.collection("expenses").doc(id).delete(), "刪除");
     else { this.expenses = this.expenses.filter(e => e.id !== id); this.saveLocal(); this.emit(); }
   }
 };
@@ -883,10 +1028,37 @@ $("#jsonIn").onchange = async ev => {
 };
 
 /* ========== 啟動 ========== */
-Store.loadLocal();
-Store.onChange(render);
-render();
-Store.connect();
+function showAcct() {
+  const u = Auth.user ? Auth.user.name : "";
+  $("#acctInfo").textContent = Auth.mode === "firebase" ? `已登入：${u}（雲端帳號，任何裝置用同一組帳號密碼登入都會看到同一份帳）` : `已登入：${u}（本機登入，尚未連上雲端）`;
+}
+async function enterApp() {
+  document.body.classList.remove("locked");
+  showAcct();
+  Store.onChange(render);
+  render();
+  await Store.connect();
+}
+$("#logoutBtn").onclick = async () => { if (await confirmBox("登出", "確定要登出嗎？登出後要重新輸入帳號密碼。")) Auth.logout(); };
+$("#loginForm").onsubmit = async ev => {
+  ev.preventDefault();
+  const msg = $("#loginMsg"), btn = $("#lgBtn");
+  btn.disabled = true; msg.className = "muted"; msg.textContent = "登入中…";
+  try { await Auth.login($("#lgUser").value, $("#lgPass").value); $("#lgPass").value = ""; msg.textContent = ""; enterApp(); }
+  catch (e) { msg.className = "warn"; msg.textContent = e.message; }
+  finally { btn.disabled = false; }
+};
+(async () => {
+  const msg = $("#loginMsg");
+  $("#lgBtn").disabled = true; msg.textContent = "載入中…";
+  try {
+    const u = await Auth.init();
+    msg.textContent = "";
+    if (u) enterApp(); else $("#lgUser").focus();
+  } catch (e) {
+    msg.className = "warn"; msg.textContent = "無法載入登入元件，請確認網路後重新整理";
+  } finally { $("#lgBtn").disabled = false; }
+})();
 // 放在自己網址時註冊離線快取（在 Claude 頁面內會被略過）
 if ("serviceWorker" in navigator && location.protocol === "https:" && !/claude\.ai|claudeusercontent/.test(location.hostname)) {
   navigator.serviceWorker.register("sw.js").catch(() => {});
