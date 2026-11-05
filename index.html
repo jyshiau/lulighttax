@@ -440,7 +440,14 @@ const DEFAULT_CATS = [
 /* ========== 雲端設定（Firebase） ==========
    填入 Firebase 專案設定後，登入改由 Firebase 驗證，資料存在 Firestore，任何裝置登入都看得到同一份帳。
    留空（null）時只做本機登入，資料只存在這台裝置。 */
-const FIREBASE_CONFIG = null;
+const FIREBASE_CONFIG = {
+  apiKey: "AIzaSyAxKBdb1jXy5pM7BzCnC6M0FGzBC8yUSuw",
+  authDomain: "lulightcoffee-976aa.firebaseapp.com",
+  projectId: "lulightcoffee-976aa",
+  storageBucket: "lulightcoffee-976aa.firebasestorage.app",
+  messagingSenderId: "603214907881",
+  appId: "1:603214907881:web:2622cdf2e8b83574ea6378"
+};
 const FIREBASE_SDK = "https://www.gstatic.com/firebasejs/10.12.2/";
 const LOGIN_EMAIL_DOMAIN = "luguang.example";   // 帳號 admin → admin@luguang.example
 // 沒有雲端時的本機登入（只是擋一下，不是真正的安全機制）

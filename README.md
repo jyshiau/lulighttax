@@ -17,7 +17,7 @@
 設定步驟：
 
 1. 到 https://console.firebase.google.com 建立專案（免費的 Spark 方案即可）。
-2. 「Build → Authentication → 開始使用」，啟用「電子郵件/密碼」登入。到「Users → 新增使用者」，電子郵件填 `admin@luguang.example`，密碼填登入用的密碼。到「Settings → 使用者動作」關閉「啟用建立帳戶（註冊）」。
+2. 「Build → Authentication → 開始使用」，啟用「電子郵件/密碼」登入。到「Settings → 授權網域」新增 `jyshiau.github.io`。到「Users → 新增使用者」，電子郵件填 `admin@luguang.example`，密碼填登入用的密碼。到「Settings → 使用者動作」關閉「啟用建立帳戶（註冊）」。
 3. 「Build → Firestore Database → 建立資料庫」，選 `asia-east1`（台灣），正式版模式。在「規則」貼上：
 
    ```
